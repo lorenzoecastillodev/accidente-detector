@@ -1,22 +1,26 @@
-# Entorno virtual
+
 venv/
 
-# Datasets y videos pesados
+
 datasets/
 *.mp4
 *.avi
 *.mov
 
-# Archivos de Python
+
 __pycache__/
 *.pyc
 
-# Modelos entrenados (pesan mucho, se regeneran o descargan)
+
 *.pt
 
-# Archivos del sistema
+
 .DS_Store
 Thumbs.db
 
-# Configuración de VS Code (opcional, algunos prefieren subir esto)
+
 .vscode/
+
+
+runs/
+bus.jpg
