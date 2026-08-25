@@ -40,7 +40,6 @@ if video_file is not None:
     posiciones_historial = defaultdict(list)
     tamanos_historial = defaultdict(list)
     frame_buffer = deque(maxlen=TAMANO_VENTANA)
-    pares_evaluados = set()
     alertas_activas = {}
 
     while cap.isOpened():
