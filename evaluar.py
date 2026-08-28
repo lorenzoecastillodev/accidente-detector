@@ -59,6 +59,8 @@ set_prueba = [
     {"video": "dataset_prueba/video-trampa-mercado.mp4", "tiene_accidente": False, "segundo_esperado": None, "cuenta": True},
     {"video": "dataset_prueba/clip-choque-2-v2.mp4", "tiene_accidente": True, "segundo_esperado": 2.1, "cuenta": False},
     {"video": "dataset_prueba/video-frenazo-normal.mp4", "tiene_accidente": False, "segundo_esperado": None, "cuenta": True},
+    {"video": "dataset_prueba/video-giro-normal.mp4", "tiene_accidente": False, "segundo_esperado": None, "cuenta": True},
+{"video": "dataset_prueba/video-interseccion-amsterdam.mp4", "tiene_accidente": False, "segundo_esperado": None, "cuenta": True},
 ]
 
 modelo_path = "yolov8s_openvino_model/" if os.path.exists("yolov8s_openvino_model") else "yolov8s.pt"

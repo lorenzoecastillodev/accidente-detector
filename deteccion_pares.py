@@ -31,8 +31,16 @@ VENTANA_ANTES = 15
 VENTANA_DESPUES = 15
 VENTANA_GIRO = 6
 UMBRAL_VEL_ACERCAMIENTO = 3
+UMBRAL_VEL_ALTA = 6   
 UMBRAL_ANGULO_GIRO = 40
-RATIO_CONTACTO = 1.3
+RATIO_CONTACTO = 0.9
+
+#sistema de puntucación
+PUNTOS_FRENAZO = 2
+PUNTOS_GIRO = 2
+PUNTOS_SEPARACION = 1
+PUNTOS_VELOCIDAD_ALTA = 1
+UMBRAL_SCORE = 3 
 
 def evaluar_par(id_i, id_j, serie_distancias, tam_prom_en_min, hist_i, hist_j):
     if len(serie_distancias) < 5:
@@ -66,11 +74,23 @@ def evaluar_par(id_i, id_j, serie_distancias, tam_prom_en_min, hist_i, hist_j):
     giro_i = bool(vec_i_giro_antes and vec_i_giro_desp and angulo_entre(vec_i_giro_antes, vec_i_giro_desp) > UMBRAL_ANGULO_GIRO)
     giro_j = bool(vec_j_giro_antes and vec_j_giro_desp and angulo_entre(vec_j_giro_antes, vec_j_giro_desp) > UMBRAL_ANGULO_GIRO)
 
-    reaccion = separandose or frenazo_i or frenazo_j or giro_i or giro_j
     vel_max_antes = max(vel_i_antes or 0, vel_j_antes or 0)
     movimiento_real = vel_max_antes > UMBRAL_VEL_ACERCAMIENTO
 
-    if not (acercandose and reaccion and movimiento_real):
+    if not (acercandose and movimiento_real):
+        return None
+
+    score = 0
+    if frenazo_i or frenazo_j:
+        score += PUNTOS_FRENAZO
+    if giro_i or giro_j:
+        score += PUNTOS_GIRO
+    if separandose:
+        score += PUNTOS_SEPARACION
+    if vel_max_antes > UMBRAL_VEL_ALTA:
+        score += PUNTOS_VELOCIDAD_ALTA
+
+    if score < UMBRAL_SCORE:
         return None
 
     razones = []
@@ -80,5 +100,7 @@ def evaluar_par(id_i, id_j, serie_distancias, tam_prom_en_min, hist_i, hist_j):
         razones.append("GIRO")
     if separandose:
         razones.append("SEPARACION")
+    if vel_max_antes > UMBRAL_VEL_ALTA:
+        razones.append("VELOCIDAD_ALTA")
 
-    return {"frame": frame_min, "par": (id_i, id_j), "razones": razones, "dist_min": dist_min}
+    return {"frame": frame_min, "par": (id_i, id_j), "razones": razones, "dist_min": dist_min, "score": score}
