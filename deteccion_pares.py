@@ -32,20 +32,31 @@ def angulo_entre(v1, v2):
     cos_ang = max(-1, min(1, (v1[0]*v2[0] + v1[1]*v2[1]) / (m1*m2)))
     return np.degrees(np.arccos(cos_ang))
 
+# ============================================================
+# PARÁMETROS CONGELADOS — 2026-08-29
+# ------------------------------------------------------------
+# Estos valores son DEFINITIVOS tras el proceso de ajuste sobre
+# el dataset de desarrollo (7 videos, ver tabla de métricas en
+# README). NO modificar sin repetir la evaluación completa y
+# documentar la razón del cambio + impacto en Precisión/Recall/F1.
+#
+# Métrica de referencia con estos valores (dev set, 7 videos):
+#   TP=3, FN=0, FP=1, TN=4 → Precisión 75%, Recall 100%, F1 86%, FPR 20%
+# ============================================================
 VENTANA_ANTES = 15
 VENTANA_DESPUES = 15
 VENTANA_GIRO = 6
 UMBRAL_VEL_ACERCAMIENTO = 3
-UMBRAL_VEL_ALTA = 6   
+UMBRAL_VEL_ALTA = 6
 UMBRAL_ANGULO_GIRO = 40
 RATIO_CONTACTO = 0.9
 
-#sistema de puntucación
+# Sistema de puntuación (congelado junto con lo anterior)
 PUNTOS_FRENAZO = 2
 PUNTOS_GIRO = 2
 PUNTOS_SEPARACION = 1
 PUNTOS_VELOCIDAD_ALTA = 1
-UMBRAL_SCORE = 3 
+UMBRAL_SCORE = 3
 
 def evaluar_par(id_i, id_j, serie_distancias, tam_prom_en_min, hist_i, hist_j, hist_i_giro, hist_j_giro):
     if len(serie_distancias) < 5:
@@ -71,6 +82,7 @@ def evaluar_par(id_i, id_j, serie_distancias, tam_prom_en_min, hist_i, hist_j, h
     frenazo_i = bool(vel_i_antes and vel_i_desp and vel_i_antes > 4 and vel_i_desp < vel_i_antes * 0.5)
     frenazo_j = bool(vel_j_antes and vel_j_desp and vel_j_antes > 4 and vel_j_desp < vel_j_antes * 0.5)
 
+    # Vectores de giro: usan hist_*_giro (bottom-center), NO hist_i/hist_j
     _, vec_i_giro_antes = velocidad_y_direccion(hist_i_giro, frame_min + VENTANA_GIRO, ventana=VENTANA_GIRO)
     _, vec_i_giro_desp = velocidad_y_direccion(hist_i_giro, frame_min + VENTANA_GIRO * 2, ventana=VENTANA_GIRO)
     _, vec_j_giro_antes = velocidad_y_direccion(hist_j_giro, frame_min + VENTANA_GIRO, ventana=VENTANA_GIRO)
