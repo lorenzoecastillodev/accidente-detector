@@ -4,7 +4,7 @@ from ultralytics import YOLO
 import tempfile
 import os
 from collections import defaultdict, deque
-from deteccion_pares import evaluar_par, centro, tamano_promedio, VENTANA_ANTES, VENTANA_DESPUES
+from deteccion_pares import evaluar_par, centro, tamano_promedio, punto_inferior, VENTANA_ANTES, VENTANA_DESPUES
 
 @st.cache_resource
 def cargar_modelo():
@@ -38,6 +38,7 @@ if video_file is not None:
     TAMANO_VENTANA = VENTANA_ANTES + VENTANA_DESPUES + 1
 
     posiciones_historial = defaultdict(list)
+    posiciones_giro_historial = defaultdict(list)
     tamanos_historial = defaultdict(list)
     frame_buffer = deque(maxlen=TAMANO_VENTANA)
     alertas_activas = {}
@@ -62,8 +63,10 @@ if video_file is not None:
             for i in range(len(ids)):
                 vid = int(ids[i])
                 pos = centro(coords[i])
+                pos_giro = punto_inferior(coords[i])   # NUEVO
                 tam = tamano_promedio(coords[i])
                 posiciones_historial[vid].append((frame_count, pos))
+                posiciones_giro_historial[vid].append((frame_count, pos_giro))   # NUEVO
                 tamanos_historial[vid].append((frame_count, tam))
                 ids_presentes.append(vid)
 
@@ -100,8 +103,10 @@ if video_file is not None:
 
                     hist_i = [(f, p) for f, p in posiciones_historial[id_i]]
                     hist_j = [(f, p) for f, p in posiciones_historial[id_j]]
+                    hist_i_giro = [(f, p) for f, p in posiciones_giro_historial[id_i]]
+                    hist_j_giro = [(f, p) for f, p in posiciones_giro_historial[id_j]]
 
-                    evento = evaluar_par(id_i, id_j, serie, tam_prom, hist_i, hist_j)
+                    evento = evaluar_par(id_i, id_j, serie, tam_prom, hist_i, hist_j, hist_i_giro, hist_j_giro)
                     if evento:
                         alertas_activas[par] = {"razones": evento["razones"], "vida": 45}
 

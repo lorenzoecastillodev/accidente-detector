@@ -6,6 +6,11 @@ def distancia(p1, p2):
 def centro(box):
     return ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
 
+def punto_inferior(box):
+    # Punto inferior central del bbox: mejor referencia en perspectiva,
+    # usado SOLO para el calculo de giro (no para distancia/contacto/frenazo)
+    return ((box[0] + box[2]) / 2, box[3])
+
 def tamano_promedio(box):
     return ((box[2]-box[0]) + (box[3]-box[1])) / 2
 
@@ -42,7 +47,7 @@ PUNTOS_SEPARACION = 1
 PUNTOS_VELOCIDAD_ALTA = 1
 UMBRAL_SCORE = 3 
 
-def evaluar_par(id_i, id_j, serie_distancias, tam_prom_en_min, hist_i, hist_j):
+def evaluar_par(id_i, id_j, serie_distancias, tam_prom_en_min, hist_i, hist_j, hist_i_giro, hist_j_giro):
     if len(serie_distancias) < 5:
         return None
 
@@ -66,10 +71,10 @@ def evaluar_par(id_i, id_j, serie_distancias, tam_prom_en_min, hist_i, hist_j):
     frenazo_i = bool(vel_i_antes and vel_i_desp and vel_i_antes > 4 and vel_i_desp < vel_i_antes * 0.5)
     frenazo_j = bool(vel_j_antes and vel_j_desp and vel_j_antes > 4 and vel_j_desp < vel_j_antes * 0.5)
 
-    _, vec_i_giro_antes = velocidad_y_direccion(hist_i, frame_min + VENTANA_GIRO, ventana=VENTANA_GIRO)
-    _, vec_i_giro_desp = velocidad_y_direccion(hist_i, frame_min + VENTANA_GIRO * 2, ventana=VENTANA_GIRO)
-    _, vec_j_giro_antes = velocidad_y_direccion(hist_j, frame_min + VENTANA_GIRO, ventana=VENTANA_GIRO)
-    _, vec_j_giro_desp = velocidad_y_direccion(hist_j, frame_min + VENTANA_GIRO * 2, ventana=VENTANA_GIRO)
+    _, vec_i_giro_antes = velocidad_y_direccion(hist_i_giro, frame_min + VENTANA_GIRO, ventana=VENTANA_GIRO)
+    _, vec_i_giro_desp = velocidad_y_direccion(hist_i_giro, frame_min + VENTANA_GIRO * 2, ventana=VENTANA_GIRO)
+    _, vec_j_giro_antes = velocidad_y_direccion(hist_j_giro, frame_min + VENTANA_GIRO, ventana=VENTANA_GIRO)
+    _, vec_j_giro_desp = velocidad_y_direccion(hist_j_giro, frame_min + VENTANA_GIRO * 2, ventana=VENTANA_GIRO)
 
     giro_i = bool(vec_i_giro_antes and vec_i_giro_desp and angulo_entre(vec_i_giro_antes, vec_i_giro_desp) > UMBRAL_ANGULO_GIRO)
     giro_j = bool(vec_j_giro_antes and vec_j_giro_desp and angulo_entre(vec_j_giro_antes, vec_j_giro_desp) > UMBRAL_ANGULO_GIRO)

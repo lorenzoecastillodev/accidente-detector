@@ -3,10 +3,12 @@ from ultralytics import YOLO
 from collections import defaultdict
 import os
 from deteccion_pares import evaluar_par, centro, tamano_promedio
+from deteccion_pares import evaluar_par, centro, tamano_promedio, punto_inferior
 
 def extraer_trayectorias(model, video_path, tracker_path, imgsz=640):
     cap = cv2.VideoCapture(video_path)
     posiciones = defaultdict(dict)
+    posiciones_giro = defaultdict(dict)
     tamanos = defaultdict(dict)
     frame_count = 0
     while cap.isOpened():
@@ -23,11 +25,12 @@ def extraer_trayectorias(model, video_path, tracker_path, imgsz=640):
             for i in range(len(ids)):
                 vid = int(ids[i])
                 posiciones[vid][frame_count] = centro(coords[i])
+                posiciones_giro[vid][frame_count] = punto_inferior(coords[i])
                 tamanos[vid][frame_count] = tamano_promedio(coords[i])
     cap.release()
-    return posiciones, tamanos
+    return posiciones, tamanos, posiciones_giro
 
-def detectar_todos_los_pares(posiciones, tamanos):
+def detectar_todos_los_pares(posiciones, tamanos, posiciones_giro):
     ids = list(posiciones.keys())
     eventos = []
     for i in range(len(ids)):
@@ -45,8 +48,10 @@ def detectar_todos_los_pares(posiciones, tamanos):
 
             hist_i = sorted(posiciones[id_i].items())
             hist_j = sorted(posiciones[id_j].items())
+            hist_i_giro = sorted(posiciones_giro[id_i].items())
+            hist_j_giro = sorted(posiciones_giro[id_j].items())
 
-            evento = evaluar_par(id_i, id_j, serie, tam_prom, hist_i, hist_j)
+            evento = evaluar_par(id_i, id_j, serie, tam_prom, hist_i, hist_j, hist_i_giro, hist_j_giro)
             if evento:
                 eventos.append(evento)
     return eventos
@@ -76,8 +81,8 @@ for caso in set_prueba:
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     cap.release()
 
-    posiciones, tamanos = extraer_trayectorias(model, caso["video"], tracker_path)
-    eventos = detectar_todos_los_pares(posiciones, tamanos)
+    posiciones, tamanos, posiciones_giro = extraer_trayectorias(model, caso["video"], tracker_path)
+    eventos = detectar_todos_los_pares(posiciones, tamanos, posiciones_giro)
 
     nombre = os.path.basename(caso["video"])
     detecto = len(eventos) > 0
