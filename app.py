@@ -17,22 +17,100 @@ def cargar_modelo():
         return YOLO("yolov8s.pt")
 
 st.set_page_config(page_title="Detector de Accidentes", layout="wide")
-st.title("🚦 Sistema de Detección de Accidentes de Tráfico")
+st.title("🚦 Detector de Accidentes de Tráfico en Tiempo Real")
 
-model = cargar_modelo()
+# ------------------------------------------------------------------
+# Helpers de render. Los colores (verde/rojo/azul/gris) se aplican via
+# HTML inline dentro de st.markdown; el look de "tarjeta blanca con
+# borde" lo da st.container(border=True), que ya respeta el tema claro
+# definido en .streamlit/config.toml (necesario para que se vea como
+# el mockup en vez del tema oscuro por defecto de Streamlit).
+# ------------------------------------------------------------------
 
-video_file = st.file_uploader("Sube un video de tráfico", type=["mp4", "avi", "mov"])
+def render_estado(camara_ok, ia_ok, n_accidentes, confianza_pct):
+    camara_val = '<span style="color:#16a34a;font-weight:600;">Conectada</span>' if camara_ok \
+        else '<span style="color:#9ca3af;font-weight:600;">Sin video</span>'
+    ia_val = '<span style="color:#16a34a;font-weight:600;">Activa</span>' if ia_ok \
+        else '<span style="color:#9ca3af;font-weight:600;">Inactiva</span>'
+    acc_color = "#dc2626" if n_accidentes > 0 else "#9ca3af"
+    conf_val = f'<span style="color:#2563eb;font-weight:600;">{confianza_pct}</span>' if confianza_pct != "—" \
+        else '<span style="color:#9ca3af;font-weight:600;">—</span>'
+    return f"""
+    <div style="display:flex;justify-content:space-between;padding:8px 0;">
+        <span>📷 <b>Cámara:</b></span> {camara_val}
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:8px 0;">
+        <span>🧠 <b>Detección IA:</b></span> {ia_val}
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:8px 0;">
+        <span>⚠️ <b>Accidentes detectados:</b></span> <span style="color:{acc_color};font-weight:600;">{n_accidentes}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:8px 0;">
+        <span>🛡️ <b>Confianza del modelo:</b></span> {conf_val}
+    </div>
+    """
+
+
+def render_info(lineas):
+    if not lineas:
+        contenido = ("El sistema analiza el tráfico en tiempo real y detecta accidentes "
+                      "automáticamente. Acá van a aparecer las anomalías (frenazo, giro "
+                      "brusco, etc.) que provocaron cada alerta.")
+    else:
+        contenido = "<br><br>".join(lineas)
+    return f"""
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;
+                padding:14px 16px;color:#1e3a8a;font-size:0.92rem;line-height:1.5;">
+        {contenido}
+    </div>
+    """
+
+
+col_carga, col_estado, col_info = st.columns([1.1, 1, 1])
+
+with col_carga:
+    with st.container(border=True):
+        st.subheader("1. Cargar video")
+        video_file = st.file_uploader(
+            "Arrastra tu video aquí o seleccioná un archivo",
+            type=["mp4", "avi", "mov"],
+        )
+        st.caption("Formatos soportados: MP4, AVI, MOV")
+
+with col_estado:
+    with st.container(border=True):
+        st.subheader("Estado del sistema")
+        estado_ph = st.empty()
+
+with col_info:
+    with st.container(border=True):
+        st.subheader("Información")
+        info_ph = st.empty()
+
+estado_ph.markdown(render_estado(False, False, 0, "—"), unsafe_allow_html=True)
+info_ph.markdown(render_info([]), unsafe_allow_html=True)
+
+st.markdown("")
+st.subheader("2. Vista en tiempo real")
+video_card = st.container(border=True)
+with video_card:
+    live_badge_ph = st.empty()
+    stframe = st.empty()
+    alerta_placeholder = st.empty()
+    status_bar_ph = st.empty()
 
 if video_file is not None:
+    with st.spinner("Cargando modelo..."):
+        model = cargar_modelo()
+
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     tfile.write(video_file.read())
     video_path = tfile.name
 
-    st.write("Procesando video...")
-    stframe = st.empty()
-    alerta_placeholder = st.empty()
-
     cap = cv2.VideoCapture(video_path)
+    fps_video = cap.get(cv2.CAP_PROP_FPS) or 30
+    ancho = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    alto = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_count = 0
 
     TAMANO_VENTANA = VENTANA_ANTES + VENTANA_DESPUES + 1
@@ -43,6 +121,19 @@ if video_file is not None:
     frame_buffer = deque(maxlen=TAMANO_VENTANA)
     alertas_activas = {}
 
+    # Persistentes para todo el video actual (no se resetean con "vida")
+    total_accidentes = 0
+    historial_razones = []  # mas reciente primero
+    confianza_actual = "—"
+
+    estado_ph.markdown(render_estado(True, True, 0, confianza_actual), unsafe_allow_html=True)
+    live_badge_ph.markdown(
+        '<div style="background:#111827;color:#fff;padding:6px 14px;border-radius:6px;'
+        'display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:0.85rem;">'
+        '<span style="width:8px;height:8px;border-radius:50%;background:#ef4444;"></span> EN VIVO</div>',
+        unsafe_allow_html=True,
+    )
+
     while cap.isOpened():
         success, frame = cap.read()
         if not success:
@@ -50,7 +141,12 @@ if video_file is not None:
 
         frame_count += 1
 
-        results = model.track(frame, persist=True, imgsz=640, verbose=False,
+        # persist=False en el primer frame de CADA video: resetea el tracker
+        # de ByteTrack (IDs, buffers internos) para que no arrastre estado
+        # del video anterior procesado en la misma sesion de Streamlit.
+        # 'model' esta cacheado con @st.cache_resource y persiste entre
+        # uploads, pero su tracker interno no se reinicia solo.
+        results = model.track(frame, persist=(frame_count > 1), imgsz=640, verbose=False,
                                classes=[2, 3, 5, 7], conf=0.3, tracker="bytetrack_custom.yaml")
         annotated_frame = results[0].plot()
 
@@ -60,6 +156,7 @@ if video_file is not None:
         if boxes is not None and boxes.id is not None:
             ids = boxes.id.cpu().numpy()
             coords = boxes.xyxy.cpu().numpy()
+            confs = boxes.conf.cpu().numpy()
             for i in range(len(ids)):
                 vid = int(ids[i])
                 pos = centro(coords[i])
@@ -69,6 +166,13 @@ if video_file is not None:
                 posiciones_giro_historial[vid].append((frame_count, pos_giro))   # NUEVO
                 tamanos_historial[vid].append((frame_count, tam))
                 ids_presentes.append(vid)
+
+            if len(confs) > 0:
+                confianza_actual = f"{confs.mean()*100:.0f}%"
+                estado_ph.markdown(
+                    render_estado(True, True, total_accidentes, confianza_actual),
+                    unsafe_allow_html=True,
+                )
 
         frame_buffer.append((frame_count, ids_presentes))
 
@@ -110,11 +214,28 @@ if video_file is not None:
                     if evento:
                         alertas_activas[par] = {"razones": evento["razones"], "vida": 45}
 
+                        # Registro PERSISTENTE: no se borra hasta el proximo video
+                        total_accidentes += 1
+                        historial_razones.insert(0, (frame_min_local, par, evento["razones"]))
+
+                        estado_ph.markdown(
+                            render_estado(True, True, total_accidentes, confianza_actual),
+                            unsafe_allow_html=True,
+                        )
+
+                        lineas = [
+                            f'🚨 <b>Frame {f}</b> (IDs {p}): {", ".join(r)}'
+                            for f, p, r in historial_razones
+                        ]
+                        info_ph.markdown(render_info(lineas), unsafe_allow_html=True)
+
         for par in list(alertas_activas.keys()):
             alertas_activas[par]["vida"] -= 1
             if alertas_activas[par]["vida"] <= 0:
                 del alertas_activas[par]
 
+        # Banner rojo TRANSITORIO: solo mientras la alerta esta "viva" (45 frames).
+        # Distinto del panel de Informacion, que queda fijo con el historial completo.
         if alertas_activas:
             textos = [f"IDs {par}: {' + '.join(info['razones'])}" for par, info in alertas_activas.items()]
             alerta_placeholder.error("🚨 POSIBLE ACCIDENTE DETECTADO — " + " | ".join(textos))
@@ -122,12 +243,33 @@ if video_file is not None:
             alerta_placeholder.empty()
 
         if frame_count % 2 == 0:
-            annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-            stframe.image(annotated_frame, channels="RGB", use_container_width=True)
+            annotated_frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+            stframe.image(annotated_frame_rgb, channels="RGB", use_container_width=True)
+
+        status_bar_ph.markdown(
+            f'<div style="display:flex;justify-content:space-between;padding-top:8px;'
+            f'color:#374151;font-size:0.85rem;">'
+            f'<span><span style="width:8px;height:8px;border-radius:50%;background:#22c55e;'
+            f'display:inline-block;margin-right:6px;"></span>Analizando video en tiempo real...</span>'
+            f'<span><b>FPS:</b> {fps_video:.0f} &nbsp;&nbsp; <b>Resolución:</b> {ancho}x{alto}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     cap.release()
     try:
         os.unlink(video_path)
     except PermissionError:
         pass
+
+    live_badge_ph.empty()
+    status_bar_ph.markdown(
+        f'<div style="display:flex;justify-content:space-between;padding-top:8px;'
+        f'color:#374151;font-size:0.85rem;">'
+        f'<span><span style="width:8px;height:8px;border-radius:50%;background:#9ca3af;'
+        f'display:inline-block;margin-right:6px;"></span>Video finalizado</span>'
+        f'<span><b>FPS:</b> {fps_video:.0f} &nbsp;&nbsp; <b>Resolución:</b> {ancho}x{alto}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
     st.success("¡Procesamiento terminado!")
