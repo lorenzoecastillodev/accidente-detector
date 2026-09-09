@@ -6,6 +6,11 @@ import os
 from collections import defaultdict, deque
 from deteccion_pares import evaluar_par, centro, tamano_promedio, punto_inferior, VENTANA_ANTES, VENTANA_DESPUES
 
+try:
+    from ultralytics.trackers.basetrack import BaseTrack
+except ImportError:
+    BaseTrack = None
+
 @st.cache_resource
 def cargar_modelo():
     try:
@@ -102,6 +107,17 @@ with video_card:
 if video_file is not None:
     with st.spinner("Cargando modelo..."):
         model = cargar_modelo()
+
+    # Reset explicito del contador de IDs de ByteTrack. 'model' esta
+    # cacheado con @st.cache_resource y persiste entre distintos videos
+    # subidos en la misma sesion; en varias versiones de ultralytics el
+    # contador de IDs de tracking es un atributo de CLASE compartido en
+    # todo el proceso, no algo ligado a la instancia del modelo. Sin este
+    # reset, subir un segundo video en la misma sesion puede arrastrar
+    # IDs/estado del video anterior aunque persist=False se use en el
+    # primer frame.
+    if BaseTrack is not None:
+        BaseTrack.reset_id()
 
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
     tfile.write(video_file.read())
