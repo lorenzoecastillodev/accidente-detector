@@ -1,4 +1,5 @@
 import cv2
+import time
 from ultralytics import YOLO
 from collections import defaultdict, deque
 import os
@@ -30,11 +31,17 @@ def procesar_video(model, video_path, tracker_path, imgsz=640):
     - Un par que ya disparo alerta se ignora (`continue`) durante VIDA_ALERTA
       frames antes de poder volver a evaluarse.
 
-    Devuelve la lista de eventos, uno por cada vez que un par dispara alerta
-    (mismo formato que devuelve evaluar_par).
+    Devuelve una tupla (eventos, fps_procesamiento):
+    - eventos: lista de eventos, uno por cada vez que un par dispara alerta
+      (mismo formato que devuelve evaluar_par).
+    - fps_procesamiento: cuadros por segundo REALES que el pipeline completo
+      (YOLO + tracking + evaluar_par) logro procesar en esta corrida. Sirve
+      para comparar contra los FPS nativos del video y saber si el sistema
+      corre a velocidad de "tiempo real" o mas lento.
     """
     cap = cv2.VideoCapture(video_path)
     frame_count = 0
+    tiempo_inicio = time.time()
 
     # Reset explicito del contador de IDs de ByteTrack. Crear un YOLO()
     # nuevo por video NO alcanza: en varias versiones de ultralytics, el
@@ -125,7 +132,9 @@ def procesar_video(model, video_path, tracker_path, imgsz=640):
                 del alertas_activas[par]
 
     cap.release()
-    return eventos
+    tiempo_total = time.time() - tiempo_inicio
+    fps_procesamiento = frame_count / tiempo_total if tiempo_total > 0 else 0
+    return eventos, fps_procesamiento
 
 
 # NOTA: todo lo de aca abajo esta envuelto en "if __name__ == '__main__':"
@@ -161,18 +170,22 @@ if __name__ == "__main__":
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         cap.release()
 
-        eventos = procesar_video(model, caso["video"], tracker_path)
+        eventos, fps_procesamiento = procesar_video(model, caso["video"], tracker_path)
 
         nombre = os.path.basename(caso["video"])
         detecto = len(eventos) > 0
 
         print(f"\n=== {nombre} (esperado: {'SI' if caso['tiene_accidente'] else 'NO'}) ===")
+        es_tiempo_real = fps_procesamiento >= fps
+        print(f"  Velocidad: {fps_procesamiento:.1f} FPS procesados vs {fps:.0f} FPS del video "
+              f"-> {'tiempo real' if es_tiempo_real else 'MAS LENTO que tiempo real'}")
         if eventos:
             for e in eventos:
                 print(f"  Segundo {round(e['frame']/fps,2)}s (frame {e['frame']}): par={e['par']} razones={e['razones']}")
         else:
             print("  Sin eventos detectados")
 
+        acierto_tiempo = None  # None = no aplica (sin choque, o sin segundo_esperado)
         if caso["tiene_accidente"] and detecto and caso["segundo_esperado"] is not None:
             margen = 1.5
             acierto_tiempo = any(abs(e["frame"]/fps - caso["segundo_esperado"]) <= margen for e in eventos)
@@ -182,11 +195,15 @@ if __name__ == "__main__":
             "nombre": nombre,
             "esperado": caso["tiene_accidente"],
             "detecto": detecto,
+            "timing_correcto": acierto_tiempo,
+            "fps_procesamiento": fps_procesamiento,
+            "fps_video": fps,
             "cuenta": caso.get("cuenta", True)
         })
 
     print("\n" + "=" * 70)
-    print("MATRIZ DE CONFUSION (solo videos que cuentan)\n")
+    print("MATRIZ DE CONFUSION - DETECCION (solo videos que cuentan)\n")
+    print("¿Disparo alguna alerta en el video? No exige que el timing sea correcto.\n")
 
     TP = sum(1 for r in resultados if r["cuenta"] and r["esperado"] and r["detecto"])
     FN = sum(1 for r in resultados if r["cuenta"] and r["esperado"] and not r["detecto"])
@@ -208,6 +225,48 @@ if __name__ == "__main__":
     print(f"F1-score:  {f1*100:.0f}%" if f1 is not None else "F1-score: N/A")
     print(f"Tasa de Falsos Positivos: {fpr*100:.0f}%" if fpr is not None else "Tasa de Falsos Positivos: N/A")
 
+    print("\n" + "=" * 70)
+    print("MATRIZ DE CONFUSION - DETECCION CON TIMING CORRECTO (mas estricta)\n")
+    print("Una alerta que dispara tarde o en el momento equivocado NO cuenta")
+    print("como acierto aca, aunque si haya 'detectado algo' en el video.\n")
+
+    def acerto_bien(r):
+        # Detecto Y el timing fue correcto. Si detecto pero timing_correcto
+        # es False (o None por no tener segundo_esperado), no cuenta como
+        # acierto estricto.
+        return r["detecto"] and r["timing_correcto"] is True
+
+    TP_t = sum(1 for r in resultados if r["cuenta"] and r["esperado"] and acerto_bien(r))
+    FN_t = sum(1 for r in resultados if r["cuenta"] and r["esperado"] and not acerto_bien(r))
+    FP_t = FP  # los falsos positivos no dependen de timing (no hay "segundo esperado" en esos videos)
+    TN_t = TN
+
+    print(f"Verdaderos Positivos (TP): {TP_t}  -> choques reales, detectados CON timing correcto")
+    print(f"Falsos Negativos   (FN): {FN_t}  -> choques reales, no detectados O detectados con timing incorrecto")
+    print(f"Falsos Positivos   (FP): {FP_t}  -> sin choque, pero disparo alerta")
+    print(f"Verdaderos Negativos (TN): {TN_t}  -> sin choque, correctamente sin alerta")
+
+    precision_t = TP_t / (TP_t + FP_t) if (TP_t + FP_t) > 0 else None
+    recall_t = TP_t / (TP_t + FN_t) if (TP_t + FN_t) > 0 else None
+    f1_t = (2 * precision_t * recall_t / (precision_t + recall_t)) if precision_t and recall_t and (precision_t + recall_t) > 0 else None
+
+    print(f"\nPrecision (con timing): {precision_t*100:.0f}%" if precision_t is not None else "\nPrecision (con timing): N/A")
+    print(f"Recall    (con timing): {recall_t*100:.0f}%" if recall_t is not None else "Recall (con timing): N/A")
+    print(f"F1-score  (con timing): {f1_t*100:.0f}%" if f1_t is not None else "F1-score (con timing): N/A")
+
     excluidos = [r["nombre"] for r in resultados if not r["cuenta"]]
     if excluidos:
         print(f"\nVideos excluidos de la metrica (casos atipicos documentados): {excluidos}")
+
+    print("\n" + "=" * 70)
+    print("VELOCIDAD DE PROCESAMIENTO (¿es realmente 'tiempo real'?)\n")
+    fps_prom = sum(r["fps_procesamiento"] for r in resultados) / len(resultados)
+    videos_lentos = [r["nombre"] for r in resultados if r["fps_procesamiento"] < r["fps_video"]]
+    print(f"FPS promedio de procesamiento: {fps_prom:.1f}")
+    if videos_lentos:
+        print(f"Videos donde el procesamiento fue MAS LENTO que el video fuente ({len(videos_lentos)}/{len(resultados)}):")
+        for r in resultados:
+            if r["nombre"] in videos_lentos:
+                print(f"  - {r['nombre']}: {r['fps_procesamiento']:.1f} FPS procesados vs {r['fps_video']:.0f} FPS del video")
+    else:
+        print("Todos los videos se procesaron a velocidad de tiempo real o mas rapido.")

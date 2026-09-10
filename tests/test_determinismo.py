@@ -35,12 +35,12 @@ for corrida in range(1, N_CORRIDAS + 1):
     # Modelo nuevo cada vez, igual que hace evaluar.py normalmente,
     # para no mezclar esta prueba con el tema de tracker compartido.
     model = YOLO(modelo_path)
-    eventos = procesar_video(model, video_path, tracker_path)
+    eventos, fps_procesamiento = procesar_video(model, video_path, tracker_path)
 
     resumen = [(e["frame"], e["par"], tuple(e["razones"])) for e in eventos]
     resultados_por_corrida.append(resumen)
 
-    print(f"\n=== Corrida {corrida} ===")
+    print(f"\n=== Corrida {corrida} ({fps_procesamiento:.1f} FPS procesados) ===")
     if resumen:
         for frame, par, razones in resumen:
             print(f"  Frame {frame}: par={par} razones={list(razones)}")
