@@ -149,7 +149,6 @@ if __name__ == "__main__":
         {"video": "dataset_prueba/clip-noche-rapido.mp4", "tiene_accidente": True, "segundo_esperado": 4.2, "cuenta": True},
         {"video": "dataset_prueba/Video Project 2.mp4", "tiene_accidente": True, "segundo_esperado": 4.9, "cuenta": True},
         {"video": "dataset_prueba/video-trampa-mercado.mp4", "tiene_accidente": False, "segundo_esperado": None, "cuenta": True},
-        {"video": "dataset_prueba/clip-choque-2-v2.mp4", "tiene_accidente": True, "segundo_esperado": 2.1, "cuenta": False},
         {"video": "dataset_prueba/video-frenazo-normal.mp4", "tiene_accidente": False, "segundo_esperado": None, "cuenta": True},
         {"video": "dataset_prueba/video-giro-normal.mp4", "tiene_accidente": False, "segundo_esperado": None, "cuenta": True},
         {"video": "dataset_prueba/video-interseccion-amsterdam.mp4", "tiene_accidente": False, "segundo_esperado": None, "cuenta": True},
