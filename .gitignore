@@ -1,26 +1,25 @@
-
 venv/
-
 
 datasets/
 *.mp4
 *.avi
 *.mov
 
-
 __pycache__/
 *.pyc
 
-
 *.pt
-
 
 .DS_Store
 Thumbs.db
 
-
 .vscode/
-
 
 runs/
 bus.jpg
+
+# Modelos entrenados localmente (se regeneran con entrenar_clasificador.py)
+*.joblib
+
+# Logs/errores de kernel generados automaticamente
+kernel.errors.txt

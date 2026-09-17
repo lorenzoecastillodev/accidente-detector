@@ -5,6 +5,7 @@ import tempfile
 import os
 from collections import defaultdict, deque
 from deteccion_pares import evaluar_par, centro, tamano_promedio, punto_inferior, VENTANA_ANTES, VENTANA_DESPUES
+from confirmacion_visual import confirmar_visualmente
 
 try:
     from ultralytics.trackers.basetrack import BaseTrack
@@ -232,7 +233,23 @@ if video_file is not None:
 
                         # Registro PERSISTENTE: no se borra hasta el proximo video
                         total_accidentes += 1
-                        historial_razones.insert(0, (frame_min_local, par, evento["razones"]))
+
+                        # Confirmacion visual EXTERNA e INFORMATIVA (Roboflow).
+                        # No modifica en nada la deteccion por movimiento de
+                        # arriba. Si falla o no hay API key, devuelve None y
+                        # simplemente no se muestra ese dato - el resto sigue
+                        # funcionando igual.
+                        # Nota: se envia el frame ACTUAL del loop (el que se esta
+                        # procesando ahora), no exactamente frame_min_local — estan
+                        # cerca en el tiempo (dentro de la ventana), pero no son
+                        # necesariamente el mismo frame exacto del contacto minimo.
+                        confianza_visual = confirmar_visualmente(frame)
+                        sufijo_visual = (
+                            f" — confirmación visual: {confianza_visual:.0f}%"
+                            if confianza_visual is not None else ""
+                        )
+
+                        historial_razones.insert(0, (frame_min_local, par, evento["razones"], sufijo_visual))
 
                         estado_ph.markdown(
                             render_estado(True, True, total_accidentes, confianza_actual),
@@ -240,8 +257,8 @@ if video_file is not None:
                         )
 
                         lineas = [
-                            f'🚨 <b>Frame {f}</b> (IDs {p}): {", ".join(r)}'
-                            for f, p, r in historial_razones
+                            f'🚨 <b>Frame {f}</b> (IDs {p}): {", ".join(r)}{sufijo}'
+                            for f, p, r, sufijo in historial_razones
                         ]
                         info_ph.markdown(render_info(lineas), unsafe_allow_html=True)
 

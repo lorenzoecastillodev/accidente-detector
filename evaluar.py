@@ -4,6 +4,7 @@ from ultralytics import YOLO
 from collections import defaultdict, deque
 import os
 from deteccion_pares import evaluar_par, centro, tamano_promedio, punto_inferior, VENTANA_ANTES, VENTANA_DESPUES
+from confirmacion_visual import confirmar_visualmente
 
 try:
     from ultralytics.trackers.basetrack import BaseTrack
@@ -124,6 +125,13 @@ def procesar_video(model, video_path, tracker_path, imgsz=640):
                     evento = evaluar_par(id_i, id_j, serie, tam_prom, hist_i, hist_j, hist_i_giro, hist_j_giro)
                     if evento:
                         alertas_activas[par] = {"razones": evento["razones"], "vida": VIDA_ALERTA}
+
+                        # Confirmacion visual EXTERNA e INFORMATIVA (modelo local
+                        # entrenado con datos de terceros). No modifica en nada la
+                        # deteccion por movimiento de arriba - solo se guarda en el
+                        # evento para poder medir despues si aporta algo real.
+                        evento["confianza_visual"] = confirmar_visualmente(frame)
+
                         eventos.append(evento)
 
         for par in list(alertas_activas.keys()):
@@ -180,7 +188,8 @@ if __name__ == "__main__":
               f"-> {'tiempo real' if es_tiempo_real else 'MAS LENTO que tiempo real'}")
         if eventos:
             for e in eventos:
-                print(f"  Segundo {round(e['frame']/fps,2)}s (frame {e['frame']}): par={e['par']} razones={e['razones']}")
+                cv_txt = f", confianza_visual={e['confianza_visual']:.0f}%" if e.get("confianza_visual") is not None else ", confianza_visual=N/A"
+                print(f"  Segundo {round(e['frame']/fps,2)}s (frame {e['frame']}): par={e['par']} razones={e['razones']}{cv_txt}")
         else:
             print("  Sin eventos detectados")
 
@@ -190,11 +199,15 @@ if __name__ == "__main__":
             acierto_tiempo = any(abs(e["frame"]/fps - caso["segundo_esperado"]) <= margen for e in eventos)
             print(f"  Esperado en ~{caso['segundo_esperado']}s -> Timing correcto: {'SI' if acierto_tiempo else 'NO'}")
 
+        confianzas_visuales = [e["confianza_visual"] for e in eventos if e.get("confianza_visual") is not None]
+        mejor_confianza_visual = max(confianzas_visuales) if confianzas_visuales else None
+
         resultados.append({
             "nombre": nombre,
             "esperado": caso["tiene_accidente"],
             "detecto": detecto,
             "timing_correcto": acierto_tiempo,
+            "confianza_visual": mejor_confianza_visual,
             "fps_procesamiento": fps_procesamiento,
             "fps_video": fps,
             "cuenta": caso.get("cuenta", True)
@@ -252,6 +265,35 @@ if __name__ == "__main__":
     print(f"\nPrecision (con timing): {precision_t*100:.0f}%" if precision_t is not None else "\nPrecision (con timing): N/A")
     print(f"Recall    (con timing): {recall_t*100:.0f}%" if recall_t is not None else "Recall (con timing): N/A")
     print(f"F1-score  (con timing): {f1_t*100:.0f}%" if f1_t is not None else "F1-score (con timing): N/A")
+
+    print("\n" + "=" * 70)
+    print("MATRIZ DE CONFUSION - CON CONFIRMACION VISUAL (experimental)\n")
+    print("Ademas de detectar por movimiento, exige que el modelo visual local")
+    print("(entrenado con datos de terceros, ver confirmacion_visual.py) tambien")
+    print("de una confianza >= UMBRAL_CONFIANZA_VISUAL. Si el archivo de pesos")
+    print("no esta descargado, confianza_visual siempre es None y esta matriz")
+    print("va a verse peor de lo real - no sacar conclusiones sin el modelo cargado.\n")
+
+    UMBRAL_CONFIANZA_VISUAL = 25  # primer valor a probar, NO esta ajustado con evidencia todavia
+
+    def confirma_visualmente(r):
+        return r["confianza_visual"] is not None and r["confianza_visual"] >= UMBRAL_CONFIANZA_VISUAL
+
+    TP_v = sum(1 for r in resultados if r["cuenta"] and r["esperado"] and r["detecto"] and confirma_visualmente(r))
+    FN_v = sum(1 for r in resultados if r["cuenta"] and r["esperado"] and not (r["detecto"] and confirma_visualmente(r)))
+    FP_v = sum(1 for r in resultados if r["cuenta"] and not r["esperado"] and r["detecto"] and confirma_visualmente(r))
+    TN_v = sum(1 for r in resultados if r["cuenta"] and not r["esperado"] and not (r["detecto"] and confirma_visualmente(r)))
+
+    print(f"Verdaderos Positivos (TP): {TP_v}")
+    print(f"Falsos Negativos   (FN): {FN_v}")
+    print(f"Falsos Positivos   (FP): {FP_v}  -> ojo: FP baja si el modelo visual NO confirma un caso que antes era FP")
+    print(f"Verdaderos Negativos (TN): {TN_v}")
+
+    precision_v = TP_v / (TP_v + FP_v) if (TP_v + FP_v) > 0 else None
+    recall_v = TP_v / (TP_v + FN_v) if (TP_v + FN_v) > 0 else None
+
+    print(f"\nPrecision (con conf. visual): {precision_v*100:.0f}%" if precision_v is not None else "\nPrecision (con conf. visual): N/A")
+    print(f"Recall    (con conf. visual): {recall_v*100:.0f}%" if recall_v is not None else "Recall (con conf. visual): N/A")
 
     excluidos = [r["nombre"] for r in resultados if not r["cuenta"]]
     if excluidos:
