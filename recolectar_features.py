@@ -1,5 +1,6 @@
 """
-Recorre una carpeta de videos y guarda en un CSV una fila por
+Recorre una carpeta de videos (tus 10 + los nuevos que sumes, sobre todo
+trafico pesado/intersecciones SIN choque) y guarda en un CSV una fila por
 cada par candidato que paso los gates fisicos (acercandose + movimiento_real),
 sin aplicar el sistema de puntos viejo. Esto sirve para juntar EJEMPLOS
 NEGATIVOS de trafico pesado (que hoy tu score confunde con choque) y
@@ -150,10 +151,17 @@ def main():
         if escribir_header:
             writer.writeheader()
 
+        prefijo_carpeta = os.path.basename(os.path.normpath(args.carpeta))
         for nombre in videos:
             print(f"Procesando {nombre}...")
             model = YOLO(args.modelo)
-            filas = recolectar_video(model, os.path.join(args.carpeta, nombre), args.tracker, nombre)
+            # Se antepone el nombre de la carpeta al nombre del video en el CSV,
+            # para evitar colisiones cuando dos carpetas distintas (por ejemplo
+            # una de videos normales y otra de accidentes) tienen archivos con
+            # el mismo nombre (v1.mov, v2.mov, etc.) - esto paso realmente y
+            # genero un dataset con nombres ambiguos que hubo que corregir a mano.
+            nombre_para_csv = f"{prefijo_carpeta}/{nombre}"
+            filas = recolectar_video(model, os.path.join(args.carpeta, nombre), args.tracker, nombre_para_csv)
             print(f"  {len(filas)} pares candidatos encontrados")
             for fila in filas:
                 writer.writerow(fila)
