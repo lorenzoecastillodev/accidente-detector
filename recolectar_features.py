@@ -1,6 +1,5 @@
 """
-Recorre una carpeta de videos (tus 10 + los nuevos que sumes, sobre todo
-trafico pesado/intersecciones SIN choque) y guarda en un CSV una fila por
+Recorre una carpeta de videos y guarda en un CSV una fila por
 cada par candidato que paso los gates fisicos (acercandose + movimiento_real),
 sin aplicar el sistema de puntos viejo. Esto sirve para juntar EJEMPLOS
 NEGATIVOS de trafico pesado (que hoy tu score confunde con choque) y
@@ -16,6 +15,16 @@ Despues de correr esto, abris el CSV y llenas a mano la columna "label":
         esperado del video, si lo sabes)
     0 = no hubo choque en este video, o este par no es el choque
         (aunque haya pasado los gates)
+
+NOTA 1: el nombre guardado en la columna "video" del CSV incluye el nombre
+de la carpeta de origen (ej: "dataset_tudat_normal/v1.mov"), no solo el
+nombre del archivo, para evitar colisiones cuando dos carpetas distintas
+tienen archivos con el mismo nombre.
+
+NOTA 2: se calcula el FPS real de cada video y se lo pasa a
+calcular_features_par(), igual que ya se hace en evaluar.py y app.py. Sin
+esto, las velocidades y ventanas de tiempo quedan calibradas para ~30 FPS
+y no son comparables con videos a otro FPS (ver deteccion_pares.py).
 """
 import argparse
 import csv
@@ -25,15 +34,15 @@ from collections import defaultdict, deque
 import cv2
 from ultralytics import YOLO
 
-from deteccion_pares import calcular_features_par, centro, punto_inferior, tamano_promedio, VENTANA_ANTES, VENTANA_DESPUES
+from deteccion_pares import (
+    calcular_features_par, centro, punto_inferior, tamano_promedio,
+    VENTANA_ANTES_SEG, VENTANA_DESPUES_SEG, ventana_en_frames,
+)
 
 try:
     from ultralytics.trackers.basetrack import BaseTrack
 except ImportError:
     BaseTrack = None
-
-TAMANO_VENTANA = VENTANA_ANTES + VENTANA_DESPUES + 1
-VIDA_ALERTA = 45
 
 CAMPOS_CSV = [
     "video", "id_i", "id_j", "frame",
@@ -52,10 +61,22 @@ def recolectar_video(model, video_path, tracker_path, nombre_video, imgsz=640):
     if BaseTrack is not None:
         BaseTrack.reset_id()
 
+    # FPS real de ESTE video - todas las ventanas de tiempo y velocidades
+    # se escalan a este valor, en vez de asumir 30 FPS fijo.
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if not fps or fps <= 0:
+        fps = 30
+        print(f"  AVISO: no se pudo leer el FPS de {nombre_video}, usando 30 por defecto")
+
+    ventana_antes_f = ventana_en_frames(VENTANA_ANTES_SEG, fps)
+    ventana_despues_f = ventana_en_frames(VENTANA_DESPUES_SEG, fps)
+    tamano_ventana_video = ventana_antes_f + ventana_despues_f + 1
+    dedup_ventana_f = ventana_en_frames(0.5, fps)  # antes hardcodeado en 15 frames (@30fps = 0.5s)
+
     posiciones_historial = defaultdict(list)
     posiciones_giro_historial = defaultdict(list)
     tamanos_historial = defaultdict(list)
-    frame_buffer = deque(maxlen=TAMANO_VENTANA)
+    frame_buffer = deque(maxlen=tamano_ventana_video)
     ya_visto = set()  # evita duplicar el mismo par decenas de veces frame a frame
     filas = []
 
@@ -82,8 +103,8 @@ def recolectar_video(model, video_path, tracker_path, nombre_video, imgsz=640):
 
         frame_buffer.append((frame_count, ids_presentes))
 
-        if len(frame_buffer) == TAMANO_VENTANA:
-            ids_en_candidato = frame_buffer[VENTANA_ANTES][1]
+        if len(frame_buffer) == tamano_ventana_video:
+            ids_en_candidato = frame_buffer[ventana_antes_f][1]
             for i in range(len(ids_en_candidato)):
                 for j in range(i + 1, len(ids_en_candidato)):
                     id_i, id_j = ids_en_candidato[i], ids_en_candidato[j]
@@ -111,11 +132,11 @@ def recolectar_video(model, video_path, tracker_path, nombre_video, imgsz=640):
                     hist_i_giro = list(posiciones_giro_historial[id_i])
                     hist_j_giro = list(posiciones_giro_historial[id_j])
 
-                    feats = calcular_features_par(id_i, id_j, serie, tam_prom, hist_i, hist_j, hist_i_giro, hist_j_giro)
+                    feats = calcular_features_par(id_i, id_j, serie, tam_prom, hist_i, hist_j, hist_i_giro, hist_j_giro, fps=fps)
                     if feats is None or not (feats["acercandose"] and feats["movimiento_real"]):
                         continue
 
-                    clave_dedup = (par, feats["frame"] // 15)  # una fila cada ~15 frames por par, no una por frame
+                    clave_dedup = (par, feats["frame"] // dedup_ventana_f)
                     if clave_dedup in ya_visto:
                         continue
                     ya_visto.add(clave_dedup)
@@ -146,25 +167,23 @@ def main():
     modo = "a" if args.append and os.path.exists(args.salida) else "w"
     escribir_header = modo == "w"
 
+    prefijo_carpeta = os.path.basename(os.path.normpath(args.carpeta))
+
     with open(args.salida, modo, newline="") as f_out:
         writer = csv.DictWriter(f_out, fieldnames=CAMPOS_CSV)
         if escribir_header:
             writer.writeheader()
 
-        prefijo_carpeta = os.path.basename(os.path.normpath(args.carpeta))
         for nombre in videos:
             print(f"Procesando {nombre}...")
             model = YOLO(args.modelo)
-            # Se antepone el nombre de la carpeta al nombre del video en el CSV,
-            # para evitar colisiones cuando dos carpetas distintas (por ejemplo
-            # una de videos normales y otra de accidentes) tienen archivos con
-            # el mismo nombre (v1.mov, v2.mov, etc.) - esto paso realmente y
-            # genero un dataset con nombres ambiguos que hubo que corregir a mano.
             nombre_para_csv = f"{prefijo_carpeta}/{nombre}"
             filas = recolectar_video(model, os.path.join(args.carpeta, nombre), args.tracker, nombre_para_csv)
             print(f"  {len(filas)} pares candidatos encontrados")
             for fila in filas:
                 writer.writerow(fila)
+            f_out.flush()  # fuerza a escribir a disco YA, no esperar a que termine todo el script.
+            os.fsync(f_out.fileno())  # y confirma que el sistema operativo lo bajo a disco de verdad.
 
     print(f"\nListo. Revisa {args.salida} y completa la columna 'label' a mano:")
     print("  1 = este par es el choque real del video")
