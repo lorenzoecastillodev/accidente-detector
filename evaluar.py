@@ -3,7 +3,7 @@ import time
 from ultralytics import YOLO
 from collections import defaultdict, deque
 import os
-from deteccion_pares_v2 import (
+from deteccion_pares import (
     evaluar_par, centro, tamano_promedio, punto_inferior,
     VENTANA_ANTES_SEG, VENTANA_DESPUES_SEG, ventana_en_frames,
 )

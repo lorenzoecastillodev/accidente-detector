@@ -4,7 +4,10 @@ from ultralytics import YOLO
 import tempfile
 import os
 from collections import defaultdict, deque
-from deteccion_pares import evaluar_par, centro, tamano_promedio, punto_inferior, VENTANA_ANTES, VENTANA_DESPUES
+from deteccion_pares import (
+    evaluar_par, centro, tamano_promedio, punto_inferior,
+    VENTANA_ANTES_SEG, VENTANA_DESPUES_SEG, ventana_en_frames,
+)
 from confirmacion_visual import confirmar_visualmente
 
 try:
@@ -109,14 +112,6 @@ if video_file is not None:
     with st.spinner("Cargando modelo..."):
         model = cargar_modelo()
 
-    # Reset explicito del contador de IDs de ByteTrack. 'model' esta
-    # cacheado con @st.cache_resource y persiste entre distintos videos
-    # subidos en la misma sesion; en varias versiones de ultralytics el
-    # contador de IDs de tracking es un atributo de CLASE compartido en
-    # todo el proceso, no algo ligado a la instancia del modelo. Sin este
-    # reset, subir un segundo video en la misma sesion puede arrastrar
-    # IDs/estado del video anterior aunque persist=False se use en el
-    # primer frame.
     if BaseTrack is not None:
         BaseTrack.reset_id()
 
@@ -130,7 +125,14 @@ if video_file is not None:
     alto = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_count = 0
 
-    TAMANO_VENTANA = VENTANA_ANTES + VENTANA_DESPUES + 1
+    # Antes: TAMANO_VENTANA fijo asumiendo ~30 FPS (VENTANA_ANTES+VENTANA_DESPUES+1
+    # en frames). Ahora se calcula segun el FPS real de ESTE video (fps_video, que
+    # ya se leia arriba pero no se usaba para esto) - ver deteccion_pares_v2.py
+    # para el detalle de por que esto importa con videos que no estan a ~30 FPS.
+    VENTANA_ANTES_F = ventana_en_frames(VENTANA_ANTES_SEG, fps_video)
+    VENTANA_DESPUES_F = ventana_en_frames(VENTANA_DESPUES_SEG, fps_video)
+    TAMANO_VENTANA = VENTANA_ANTES_F + VENTANA_DESPUES_F + 1
+    VIDA_ALERTA_F = ventana_en_frames(45 / 30, fps_video)  # 45 frames @ 30fps = 1.5 segundos
 
     posiciones_historial = defaultdict(list)
     posiciones_giro_historial = defaultdict(list)
@@ -138,9 +140,8 @@ if video_file is not None:
     frame_buffer = deque(maxlen=TAMANO_VENTANA)
     alertas_activas = {}
 
-    # Persistentes para todo el video actual (no se resetean con "vida")
     total_accidentes = 0
-    historial_razones = []  # mas reciente primero
+    historial_razones = []
     confianza_actual = "—"
 
     estado_ph.markdown(render_estado(True, True, 0, confianza_actual), unsafe_allow_html=True)
@@ -158,11 +159,6 @@ if video_file is not None:
 
         frame_count += 1
 
-        # persist=False en el primer frame de CADA video: resetea el tracker
-        # de ByteTrack (IDs, buffers internos) para que no arrastre estado
-        # del video anterior procesado en la misma sesion de Streamlit.
-        # 'model' esta cacheado con @st.cache_resource y persiste entre
-        # uploads, pero su tracker interno no se reinicia solo.
         results = model.track(frame, persist=(frame_count > 1), imgsz=640, verbose=False,
                                classes=[2, 3, 5, 7], conf=0.3, tracker="bytetrack_custom.yaml")
         annotated_frame = results[0].plot()
@@ -177,10 +173,10 @@ if video_file is not None:
             for i in range(len(ids)):
                 vid = int(ids[i])
                 pos = centro(coords[i])
-                pos_giro = punto_inferior(coords[i])   # NUEVO
+                pos_giro = punto_inferior(coords[i])
                 tam = tamano_promedio(coords[i])
                 posiciones_historial[vid].append((frame_count, pos))
-                posiciones_giro_historial[vid].append((frame_count, pos_giro))   # NUEVO
+                posiciones_giro_historial[vid].append((frame_count, pos_giro))
                 tamanos_historial[vid].append((frame_count, tam))
                 ids_presentes.append(vid)
 
@@ -194,8 +190,8 @@ if video_file is not None:
         frame_buffer.append((frame_count, ids_presentes))
 
         if len(frame_buffer) == TAMANO_VENTANA:
-            frame_candidato = frame_buffer[VENTANA_ANTES][0]
-            ids_en_candidato = frame_buffer[VENTANA_ANTES][1]
+            frame_candidato = frame_buffer[VENTANA_ANTES_F][0]
+            ids_en_candidato = frame_buffer[VENTANA_ANTES_F][1]
 
             for i in range(len(ids_en_candidato)):
                 for j in range(i + 1, len(ids_en_candidato)):
@@ -227,22 +223,12 @@ if video_file is not None:
                     hist_i_giro = [(f, p) for f, p in posiciones_giro_historial[id_i]]
                     hist_j_giro = [(f, p) for f, p in posiciones_giro_historial[id_j]]
 
-                    evento = evaluar_par(id_i, id_j, serie, tam_prom, hist_i, hist_j, hist_i_giro, hist_j_giro)
+                    evento = evaluar_par(id_i, id_j, serie, tam_prom, hist_i, hist_j, hist_i_giro, hist_j_giro, fps=fps_video)
                     if evento:
-                        alertas_activas[par] = {"razones": evento["razones"], "vida": 45}
+                        alertas_activas[par] = {"razones": evento["razones"], "vida": VIDA_ALERTA_F}
 
-                        # Registro PERSISTENTE: no se borra hasta el proximo video
                         total_accidentes += 1
 
-                        # Confirmacion visual EXTERNA e INFORMATIVA (Roboflow).
-                        # No modifica en nada la deteccion por movimiento de
-                        # arriba. Si falla o no hay API key, devuelve None y
-                        # simplemente no se muestra ese dato - el resto sigue
-                        # funcionando igual.
-                        # Nota: se envia el frame ACTUAL del loop (el que se esta
-                        # procesando ahora), no exactamente frame_min_local — estan
-                        # cerca en el tiempo (dentro de la ventana), pero no son
-                        # necesariamente el mismo frame exacto del contacto minimo.
                         confianza_visual = confirmar_visualmente(frame)
                         sufijo_visual = (
                             f" — confirmación visual: {confianza_visual:.0f}%"
@@ -267,8 +253,6 @@ if video_file is not None:
             if alertas_activas[par]["vida"] <= 0:
                 del alertas_activas[par]
 
-        # Banner rojo TRANSITORIO: solo mientras la alerta esta "viva" (45 frames).
-        # Distinto del panel de Informacion, que queda fijo con el historial completo.
         if alertas_activas:
             textos = [f"IDs {par}: {' + '.join(info['razones'])}" for par, info in alertas_activas.items()]
             alerta_placeholder.error("🚨 POSIBLE ACCIDENTE DETECTADO — " + " | ".join(textos))
