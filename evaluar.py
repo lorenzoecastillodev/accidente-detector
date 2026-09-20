@@ -3,7 +3,10 @@ import time
 from ultralytics import YOLO
 from collections import defaultdict, deque
 import os
-from deteccion_pares import evaluar_par, centro, tamano_promedio, punto_inferior, VENTANA_ANTES, VENTANA_DESPUES
+from deteccion_pares_v2 import (
+    evaluar_par, centro, tamano_promedio, punto_inferior,
+    VENTANA_ANTES_SEG, VENTANA_DESPUES_SEG, ventana_en_frames,
+)
 from confirmacion_visual import confirmar_visualmente
 
 try:
@@ -14,18 +17,20 @@ except ImportError:
           "entre videos. Puede que la version de ultralytics instalada tenga "
           "otra ruta de modulo. Revisar si las metricas parecen inconsistentes.")
 
-# Debe coincidir EXACTAMENTE con la logica de app.py (misma "regla de oro" del
-# proyecto: cualquier cambio aca debe reflejarse tambien alla, y viceversa).
-TAMANO_VENTANA = VENTANA_ANTES + VENTANA_DESPUES + 1
-VIDA_ALERTA = 45  # frames que una alerta permanece activa antes de poder re-evaluarse (igual que app.py)
+# VIDA_ALERTA esta calibrado en segundos ahora (1.5s @ 30fps = 45 frames,
+# igual que el valor original) y se escala al FPS real de cada video, igual
+# que las demas ventanas de tiempo.
+VIDA_ALERTA_SEG = 45 / 30
 
 
 def procesar_video(model, video_path, tracker_path, imgsz=640):
     """
     Replica frame por frame la logica real de app.py:
     - Tracking incremental (no se ven frames futuros).
-    - Ventana deslizante de TAMANO_VENTANA frames; se evalua el frame central
-      de la ventana (frame_buffer[VENTANA_ANTES]) en cada iteracion.
+    - Ventana deslizante de tamano variable segun el FPS real del video
+      (antes era un tamano fijo de frames, calibrado asumiendo ~30 FPS -
+      ver deteccion_pares_v2.py para el detalle de por que se cambio esto);
+      se evalua el frame central de la ventana en cada iteracion.
     - hist_i/hist_j/hist_i_giro/hist_j_giro son el historial ACUMULADO hasta
       el frame actual (causal), igual que en app.py. Solo 'serie' (la
       distancia par a par) se restringe a la ventana actual.
@@ -44,6 +49,18 @@ def procesar_video(model, video_path, tracker_path, imgsz=640):
     frame_count = 0
     tiempo_inicio = time.time()
 
+    # FPS real del video - de aca en mas todas las ventanas de tiempo y
+    # umbrales de velocidad se escalan a este valor, en vez de asumir 30.
+    fps_video = cap.get(cv2.CAP_PROP_FPS)
+    if not fps_video or fps_video <= 0:
+        fps_video = 30  # fallback por si el video no reporta FPS valido
+        print(f"AVISO: no se pudo leer el FPS de {video_path}, usando 30 por defecto")
+
+    ventana_antes_f = ventana_en_frames(VENTANA_ANTES_SEG, fps_video)
+    ventana_despues_f = ventana_en_frames(VENTANA_DESPUES_SEG, fps_video)
+    tamano_ventana_video = ventana_antes_f + ventana_despues_f + 1
+    vida_alerta_video = ventana_en_frames(VIDA_ALERTA_SEG, fps_video)
+
     # Reset explicito del contador de IDs de ByteTrack. Crear un YOLO()
     # nuevo por video NO alcanza: en varias versiones de ultralytics, el
     # contador de IDs de tracking es un atributo de CLASE compartido en
@@ -56,7 +73,7 @@ def procesar_video(model, video_path, tracker_path, imgsz=640):
     posiciones_historial = defaultdict(list)
     posiciones_giro_historial = defaultdict(list)
     tamanos_historial = defaultdict(list)
-    frame_buffer = deque(maxlen=TAMANO_VENTANA)
+    frame_buffer = deque(maxlen=tamano_ventana_video)
     alertas_activas = {}
     eventos = []
 
@@ -87,8 +104,8 @@ def procesar_video(model, video_path, tracker_path, imgsz=640):
 
         frame_buffer.append((frame_count, ids_presentes))
 
-        if len(frame_buffer) == TAMANO_VENTANA:
-            ids_en_candidato = frame_buffer[VENTANA_ANTES][1]
+        if len(frame_buffer) == tamano_ventana_video:
+            ids_en_candidato = frame_buffer[ventana_antes_f][1]
 
             for i in range(len(ids_en_candidato)):
                 for j in range(i + 1, len(ids_en_candidato)):
@@ -122,9 +139,9 @@ def procesar_video(model, video_path, tracker_path, imgsz=640):
                     hist_i_giro = list(posiciones_giro_historial[id_i])
                     hist_j_giro = list(posiciones_giro_historial[id_j])
 
-                    evento = evaluar_par(id_i, id_j, serie, tam_prom, hist_i, hist_j, hist_i_giro, hist_j_giro)
+                    evento = evaluar_par(id_i, id_j, serie, tam_prom, hist_i, hist_j, hist_i_giro, hist_j_giro, fps=fps_video)
                     if evento:
-                        alertas_activas[par] = {"razones": evento["razones"], "vida": VIDA_ALERTA}
+                        alertas_activas[par] = {"razones": evento["razones"], "vida": vida_alerta_video}
 
                         # Confirmacion visual EXTERNA e INFORMATIVA (modelo local
                         # entrenado con datos de terceros). No modifica en nada la
@@ -243,14 +260,11 @@ if __name__ == "__main__":
     print("como acierto aca, aunque si haya 'detectado algo' en el video.\n")
 
     def acerto_bien(r):
-        # Detecto Y el timing fue correcto. Si detecto pero timing_correcto
-        # es False (o None por no tener segundo_esperado), no cuenta como
-        # acierto estricto.
         return r["detecto"] and r["timing_correcto"] is True
 
     TP_t = sum(1 for r in resultados if r["cuenta"] and r["esperado"] and acerto_bien(r))
     FN_t = sum(1 for r in resultados if r["cuenta"] and r["esperado"] and not acerto_bien(r))
-    FP_t = FP  # los falsos positivos no dependen de timing (no hay "segundo esperado" en esos videos)
+    FP_t = FP
     TN_t = TN
 
     print(f"Verdaderos Positivos (TP): {TP_t}  -> choques reales, detectados CON timing correcto")
